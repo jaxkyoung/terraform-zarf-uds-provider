@@ -1,4 +1,4 @@
-module github.com/jackyoung/terraform-provider-zarf
+module github.com/jaxkyoung/terraform-provider-zarf
 
 go 1.23
 

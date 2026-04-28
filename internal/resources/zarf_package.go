@@ -15,7 +15,7 @@ import (
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema/planmodifier"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema/stringplanmodifier"
 	"github.com/hashicorp/terraform-plugin-framework/types"
-	"github.com/jackyoung/terraform-provider-zarf/internal/client"
+	"github.com/jaxkyoung/terraform-provider-zarf/internal/client"
 )
 
 var _ resource.Resource = &zarfPackageResource{}

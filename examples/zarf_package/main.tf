@@ -1,7 +1,7 @@
 terraform {
   required_providers {
     zarf = {
-      source  = "jackyoung/zarf"
+      source  = "jaxkyoung/zarf"
       version = "~> 0.1"
     }
   }

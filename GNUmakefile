@@ -1,5 +1,5 @@
 HOSTNAME    = registry.terraform.io
-NAMESPACE   = jackyoung
+NAMESPACE   = jaxkyoung
 NAME        = zarf
 BINARY      = terraform-provider-$(NAME)
 VERSION     = 0.1.0

@@ -8,8 +8,8 @@ import (
 	"github.com/hashicorp/terraform-plugin-framework/provider/schema"
 	"github.com/hashicorp/terraform-plugin-framework/resource"
 	"github.com/hashicorp/terraform-plugin-framework/types"
-	"github.com/jackyoung/terraform-provider-zarf/internal/client"
-	"github.com/jackyoung/terraform-provider-zarf/internal/resources"
+	"github.com/jaxkyoung/terraform-provider-zarf/internal/client"
+	"github.com/jaxkyoung/terraform-provider-zarf/internal/resources"
 )
 
 var _ provider.Provider = &zarfProvider{}
