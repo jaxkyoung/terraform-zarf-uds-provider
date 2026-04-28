@@ -53,6 +53,9 @@ type UDSDeployOptions struct {
 	BundlePath string
 	Packages   []string
 	SetVars    map[string]string
+	// ConfigYAML is the raw YAML content of a uds-config file. When set, it is
+	// written to a temp file and passed as --config <path> to uds deploy.
+	ConfigYAML string
 	Retries    int
 	Resume     bool
 }
@@ -246,6 +249,7 @@ func (c *Client) ZarfSnapshotNames(ctx context.Context) (map[string]struct{}, er
 }
 
 // UDSDeployBundle runs `uds deploy`.
+// If ConfigYAML is set it is written to a temp file and passed as --config.
 func (c *Client) UDSDeployBundle(ctx context.Context, opts UDSDeployOptions) error {
 	args := []string{"deploy", opts.BundlePath, "--confirm"}
 
@@ -260,6 +264,22 @@ func (c *Client) UDSDeployBundle(ctx context.Context, opts UDSDeployOptions) err
 	}
 	if opts.Resume {
 		args = append(args, "--resume")
+	}
+
+	if opts.ConfigYAML != "" {
+		f, err := os.CreateTemp("", "uds-config-*.yaml")
+		if err != nil {
+			return fmt.Errorf("creating temp uds config file: %w", err)
+		}
+		defer os.Remove(f.Name())
+
+		if _, err := f.WriteString(opts.ConfigYAML); err != nil {
+			f.Close()
+			return fmt.Errorf("writing uds config file: %w", err)
+		}
+		f.Close()
+
+		args = append(args, "--config", f.Name())
 	}
 
 	_, err := c.run(ctx, c.cfg.UDSBinary, args...)

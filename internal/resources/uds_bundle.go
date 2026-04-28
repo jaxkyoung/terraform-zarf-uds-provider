@@ -31,6 +31,7 @@ type udsBundleResourceModel struct {
 	BundlePath types.String `tfsdk:"bundle_path"`
 	Packages   types.List   `tfsdk:"packages"`
 	SetVars    types.Map    `tfsdk:"set_vars"`
+	ConfigYAML types.String `tfsdk:"config_yaml"`
 	Retries    types.Int64  `tfsdk:"retries"`
 	Resume     types.Bool   `tfsdk:"resume"`
 }
@@ -40,16 +41,18 @@ func NewUDSBundleResource() resource.Resource {
 	return &udsBundleResource{}
 }
 
-func (r *udsBundleResource) Metadata(_ context.Context, req resource.MetadataRequest, resp *resource.MetadataResponse) {
-	resp.TypeName = req.ProviderTypeName + "_bundle"
+func (r *udsBundleResource) Metadata(_ context.Context, _ resource.MetadataRequest, resp *resource.MetadataResponse) {
+	// Intentionally not prefixed with the provider name so the HCL resource
+	// type matches the UDS tooling convention: resource "uds_bundle" "..."
+	resp.TypeName = "uds_bundle"
 }
 
 func (r *udsBundleResource) Schema(_ context.Context, _ resource.SchemaRequest, resp *resource.SchemaResponse) {
 	resp.Schema = schema.Schema{
 		Description: "Deploys and manages a UDS bundle in the configured Kubernetes cluster. " +
-			"A UDS bundle is a collection of Zarf packages deployed together. " +
-			"Note: UDS does not provide a bundle list command, so Read reconciliation uses " +
-			"'zarf package list' to check whether the listed packages are still deployed.",
+			"A UDS bundle is a collection of Zarf packages deployed together via 'uds deploy'. " +
+			"Read drift detection uses 'zarf package list' to check constituent packages, " +
+			"since UDS provides no bundle list command.",
 		Attributes: map[string]schema.Attribute{
 			"id": schema.StringAttribute{
 				Computed:    true,
@@ -75,9 +78,9 @@ func (r *udsBundleResource) Schema(_ context.Context, _ resource.SchemaRequest, 
 			"packages": schema.ListAttribute{
 				Optional:    true,
 				ElementType: types.StringType,
-				Description: "Subset of package names within the bundle to deploy. Deploys all packages when omitted. " +
-					"Also used during Read to detect drift — if none of these packages are deployed, " +
-					"Terraform will plan a new deployment.",
+				Description: "Subset of Zarf package names within the bundle to deploy. " +
+					"Deploys all packages when omitted. Also used for drift detection during Read — " +
+					"if none of these package names appear in 'zarf package list', Terraform plans a new deployment.",
 				PlanModifiers: []planmodifier.List{
 					listplanmodifier.UseStateForUnknown(),
 				},
@@ -85,10 +88,27 @@ func (r *udsBundleResource) Schema(_ context.Context, _ resource.SchemaRequest, 
 			"set_vars": schema.MapAttribute{
 				Optional:    true,
 				ElementType: types.StringType,
-				Description: "Variables to set during bundle deployment (KEY=value).",
+				Description: "Package-level variables passed as --set KEY=VALUE flags to 'uds deploy'. " +
+					"For Helm chart value overrides, use config_yaml instead.",
 				PlanModifiers: []planmodifier.Map{
 					mapplanmodifier.UseStateForUnknown(),
 				},
+			},
+			"config_yaml": schema.StringAttribute{
+				Optional: true,
+				Description: "UDS config file contents as a YAML string, passed to 'uds deploy --config'. " +
+					"Supports per-package Helm chart value overrides and variable injection. " +
+					"Use yamlencode() in Terraform to generate this from a structured map. " +
+					"Changes to this attribute trigger an in-place redeploy (no destroy required).\n\n" +
+					"Example structure:\n" +
+					"  packages:\n" +
+					"    - name: my-package\n" +
+					"      overrides:\n" +
+					"        my-component:\n" +
+					"          my-chart:\n" +
+					"            values:\n" +
+					"              - path: replicaCount\n" +
+					"                value: 2",
 			},
 			"retries": schema.Int64Attribute{
 				Optional:    true,
@@ -134,7 +154,11 @@ func (r *udsBundleResource) Create(ctx context.Context, req resource.CreateReque
 		return
 	}
 
-	opts := r.buildDeployOptions(ctx, plan)
+	opts, err := r.buildDeployOptions(ctx, plan)
+	if err != nil {
+		resp.Diagnostics.AddError("Failed to Prepare Deploy Options", err.Error())
+		return
+	}
 	if err := r.client.UDSDeployBundle(ctx, opts); err != nil {
 		resp.Diagnostics.AddError("UDS Deploy Failed", err.Error())
 		return
@@ -159,9 +183,9 @@ func (r *udsBundleResource) Read(ctx context.Context, req resource.ReadRequest, 
 		}
 	}
 
-	// Without a `uds bundle list` command, we approximate drift detection by checking
-	// whether the constituent packages are still present in `zarf package list`.
-	// If the user did not specify `packages`, we cannot detect drift and keep existing state.
+	// Without a `uds bundle list` command, drift detection checks constituent
+	// package names in `zarf package list`. If packages is not set we can't
+	// detect drift, so keep the existing state.
 	if len(expectedPkgs) == 0 {
 		resp.Diagnostics.Append(resp.State.Set(ctx, &state)...)
 		return
@@ -187,7 +211,6 @@ func (r *udsBundleResource) Read(ctx context.Context, req resource.ReadRequest, 
 	}
 
 	if !anyFound {
-		// None of the expected packages are deployed — the bundle is gone.
 		resp.State.RemoveResource(ctx)
 		return
 	}
@@ -209,7 +232,11 @@ func (r *udsBundleResource) Update(ctx context.Context, req resource.UpdateReque
 	}
 	plan.ID = state.ID
 
-	opts := r.buildDeployOptions(ctx, plan)
+	opts, err := r.buildDeployOptions(ctx, plan)
+	if err != nil {
+		resp.Diagnostics.AddError("Failed to Prepare Deploy Options", err.Error())
+		return
+	}
 	if err := r.client.UDSDeployBundle(ctx, opts); err != nil {
 		resp.Diagnostics.AddError("UDS Re-Deploy (Update) Failed", err.Error())
 		return
@@ -240,17 +267,18 @@ func (r *udsBundleResource) Delete(ctx context.Context, req resource.DeleteReque
 }
 
 func (r *udsBundleResource) ImportState(ctx context.Context, req resource.ImportStateRequest, resp *resource.ImportStateResponse) {
-	// The import ID is the logical bundle name (the `name` attribute).
-	// After import, `bundle_path` and `packages` will be unknown and must be added to config.
+	// Import ID is the logical bundle name (the `name` attribute).
+	// After import, bundle_path, packages, and config_yaml are unknown — add them to config before next apply.
 	resource.ImportStatePassthroughID(ctx, path.Root("id"), req, resp)
 }
 
 // buildDeployOptions converts the Terraform model into CLI options.
-func (r *udsBundleResource) buildDeployOptions(ctx context.Context, m udsBundleResourceModel) client.UDSDeployOptions {
+func (r *udsBundleResource) buildDeployOptions(ctx context.Context, m udsBundleResourceModel) (client.UDSDeployOptions, error) {
 	opts := client.UDSDeployOptions{
 		BundlePath: m.BundlePath.ValueString(),
 		Retries:    int(m.Retries.ValueInt64()),
 		Resume:     m.Resume.ValueBool(),
+		ConfigYAML: m.ConfigYAML.ValueString(),
 	}
 	if !m.Packages.IsNull() && !m.Packages.IsUnknown() {
 		m.Packages.ElementsAs(ctx, &opts.Packages, false)
@@ -258,5 +286,5 @@ func (r *udsBundleResource) buildDeployOptions(ctx context.Context, m udsBundleR
 	if !m.SetVars.IsNull() && !m.SetVars.IsUnknown() {
 		m.SetVars.ElementsAs(ctx, &opts.SetVars, false)
 	}
-	return opts
+	return opts, nil
 }
