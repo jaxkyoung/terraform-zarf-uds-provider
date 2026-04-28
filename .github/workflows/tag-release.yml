@@ -1,0 +1,32 @@
+name: tag-release
+
+on:
+  push:
+    branches:
+      - main
+
+permissions:
+  contents: write
+
+jobs:
+  tag-release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.x"
+
+      - name: Install commitizen
+        run: pip install commitizen
+
+      - name: Bump version and push tag
+        run: |
+          git config user.name "GitHub Actions"
+          git config user.email "noreply@github.com"
+          cz --no-raise 21 bump --annotated-tag --changelog --yes
+          git push origin HEAD
+          git push --tags origin
