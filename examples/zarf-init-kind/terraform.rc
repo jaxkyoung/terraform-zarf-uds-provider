@@ -1,0 +1,12 @@
+# Local provider mirror configuration.
+# Used when running the provider from source instead of the Terraform Registry.
+# Pass to terraform with: TF_CLI_CONFIG_FILE=terraform.rc terraform <command>
+provider_installation {
+  filesystem_mirror {
+    path    = "~/.terraform.d/plugins"
+    include = ["jackyoung/zarf"]
+  }
+  direct {
+    exclude = ["jackyoung/zarf"]
+  }
+}
